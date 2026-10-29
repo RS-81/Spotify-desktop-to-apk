@@ -1,30 +1,8 @@
-# Spotify Desktop Web Player for Android
+# Spotify Desktop Backend + Mobile UI for Android
 
-This project builds an Android APK that runs Spotify's **Desktop Web Player** (`https://open.spotify.com`) inside a custom, DRM-enabled Android WebView with background audio playback.
+This project runs Spotify's **Desktop Web Player** as a backend engine inside an Android WebView (unlocking on-demand song selection, unlimited skips, and queue control) while presenting a **clean, full-size Mobile UI** with native Android Search, Navigation Tabs (Home / Search / Playlists), and a Native Bottom Play Bar.
 
-## Features Included
-1. **Desktop User-Agent Spoofing**: Forces Spotify to serve the full desktop web player instead of redirecting to the mobile app or Play Store.
-2. **Widevine DRM Support (`RESOURCE_PROTECTED_MEDIA_ID`)**: Automatically grants Encrypted Media Extensions (EME) permissions in `WebChromeClient` so Spotify encrypted streams play natively.
-3. **Background Audio Service**: Runs a foreground `mediaPlayback` service with CPU and Wi-Fi wake locks so music continues playing when your screen turns off or you switch apps.
-4. **Desktop Viewport Adaptation**: Configures wide viewport overview mode with pinch-to-zoom and custom CSS adjustments for mobile screens.
-
----
-
-## How to Get Your APK in 2 Minutes (No PC or Android Studio Needed)
-
-This project includes an automated **GitHub Actions** cloud compiler workflow (`.github/workflows/build-apk.yml`).
-
-1. Create a free account at [github.com](https://github.com) and create a **New Repository**.
-2. Upload all the files inside this folder to your repository (making sure the `.github` folder is included).
-3. Click the **Actions** tab at the top of your GitHub repository.
-4. Click on the **Build Android APK** workflow run. Once it finishes (~2 minutes), scroll down to **Artifacts** and download **`SpotifyDesktopWeb-APK`** (which contains `app-debug.apk`).
-5. Open `app-debug.apk` on your Android phone to install!
-
----
-
-## Building Locally with Android Studio
-
-1. Open Android Studio and select **Open** -> choose this project folder.
-2. Let Gradle sync the dependencies.
-3. Go to **Build > Build Bundle(s) / APK(s) > Build APK(s)**.
-4. Your installable APK will be generated at `app/build/outputs/apk/debug/app-debug.apk`.
+## Why This Fixes Playback & Tiny Desktop UI
+1. **Deep Desktop Spoofing (`navigator.userAgentData` + `window.screen`)**: Modern Spotify checks `navigator.userAgentData.mobile` and `window.screen.width` in addition to the User-Agent string. This app overrides those properties before Spotify loads so Widevine DRM and the Web Playback SDK initialize properly.
+2. **Full-Size Mobile Layout (1.0x Scale)**: Instead of shrinking a 1280px monitor onto a phone screen, CSS rules collapse the desktop sidebars and scale whichever view you select (Home, Search, or Library/Playlists) to 100% mobile width with touch-friendly rows.
+3. **Native Android Play Bar & Tab Bar**: Native Android bottom playback controls (Play/Pause, Previous, Next, Shuffle, Track Title & Artist) and top navigation tabs communicate with the desktop web player backend via a JavaScript bridge.

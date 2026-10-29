@@ -65,8 +65,8 @@ class PlaybackService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Spotify Desktop Web")
-            .setContentText("Background audio playback active")
+            .setContentTitle("Spotify Mobile Bridge")
+            .setContentText("Desktop backend playback active")
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -80,9 +80,7 @@ class PlaybackService : Service() {
                 CHANNEL_ID,
                 "Spotify Background Playback",
                 NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Keeps Spotify Desktop Web playing while screen is off"
-            }
+            )
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
         }
