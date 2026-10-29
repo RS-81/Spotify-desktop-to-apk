@@ -25,23 +25,31 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
+import org.json.JSONArray
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: BackgroundWebView
+    private lateinit var nativeListContainer: LinearLayout
+    private lateinit var nativeScrollView: ScrollView
     private lateinit var trackTitleView: TextView
     private lateinit var trackArtistView: TextView
     private lateinit var playPauseBtn: Button
     private lateinit var progressBar: ProgressBar
     private lateinit var searchInput: EditText
+    private var showingRawWebView = false
 
     private val desktopUserAgent =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
@@ -76,12 +84,6 @@ class MainActivity : AppCompatActivity() {
             resources.displayMetrics
         ).toInt()
 
-    /**
-     * Builds a clean Native Android Mobile UI around the Desktop Web Player backend:
-     * 1. Top Search Bar + Quick View Tabs (Home, Search, Playlists/Library, Activate Audio)
-     * 2. Center Full-Width Mobile-Adapted WebView
-     * 3. Native Bottom Now Playing Bar (Song Title, Artist, Shuffle, Prev, Play/Pause, Next)
-     */
     private fun buildMobileShellLayout(): View {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -115,7 +117,6 @@ class MainActivity : AppCompatActivity() {
                 ) {
                     val q = text.toString().trim()
                     if (q.isNotEmpty()) {
-                        switchMobileMode("main")
                         webView.loadUrl("https://open.spotify.com/search/" + android.net.Uri.encode(q))
                     }
                     true
@@ -123,15 +124,11 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        val searchBtn = createStyledButton("Go", "#1DB954", Color.BLACK).apply {
+        val searchBtn = createStyledButton("Search", "#1DB954", Color.BLACK).apply {
             setOnClickListener {
                 val q = searchInput.text.toString().trim()
                 if (q.isNotEmpty()) {
-                    switchMobileMode("main")
                     webView.loadUrl("https://open.spotify.com/search/" + android.net.Uri.encode(q))
-                } else {
-                    switchMobileMode("main")
-                    webView.loadUrl("https://open.spotify.com/search")
                 }
             }
         }
@@ -140,46 +137,74 @@ class MainActivity : AppCompatActivity() {
         searchRow.addView(searchBtn)
         root.addView(searchRow)
 
-        // --- TOP NAVIGATION TABS (HOME | PLAYLISTS | SEARCH | ACTIVATE PLAYER) ---
+        // --- TOP NAVIGATION TABS ---
         val tabRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(dp(6), dp(4), dp(6), dp(6))
             setBackgroundColor(Color.parseColor("#181818"))
         }
 
-        val homeTab = createTabButton("Home") {
-            switchMobileMode("main")
-            webView.loadUrl("https://open.spotify.com/")
+        val playlistsTab = createTabButton("Playlists") {
+            setRawWebViewVisible(false)
+            requestBackendList("playlists")
         }
-        val libraryTab = createTabButton("My Playlists") {
-            switchMobileMode("library")
+        val tracksTab = createTabButton("Songs") {
+            setRawWebViewVisible(false)
+            requestBackendList("tracks")
         }
-        val searchTab = createTabButton("Browse") {
-            switchMobileMode("main")
-            webView.loadUrl("https://open.spotify.com/search")
-        }
-        val fixAudioTab = createTabButton("Connect Audio") {
+        val connectAudioTab = createTabButton("Activate Audio") {
             activateWebPlayerDevice()
         }
+        val loginWebTab = createTabButton("Login / Web") {
+            setRawWebViewVisible(!showingRawWebView)
+        }
 
-        tabRow.addView(homeTab)
-        tabRow.addView(libraryTab)
-        tabRow.addView(searchTab)
-        tabRow.addView(fixAudioTab)
+        tabRow.addView(playlistsTab)
+        tabRow.addView(tracksTab)
+        tabRow.addView(connectAudioTab)
+        tabRow.addView(loginWebTab)
         root.addView(tabRow)
 
-        // --- CENTER WEBVIEW (MOBILE-RESTYLED DESKTOP BACKEND) ---
-        webView = BackgroundWebView(this).apply {
-            setBackgroundColor(Color.parseColor("#121212"))
+        // --- CENTER STACK: BACKEND WEBVIEW + NATIVE MOBILE LIST UI ON TOP ---
+        val centerFrame = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 0,
                 1f
             )
         }
-        root.addView(webView)
 
-        // --- THIN PROGRESS BAR ---
+        webView = BackgroundWebView(this).apply {
+            setBackgroundColor(Color.parseColor("#121212"))
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        }
+
+        nativeScrollView = ScrollView(this).apply {
+            setBackgroundColor(Color.parseColor("#121212"))
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        }
+
+        nativeListContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(8), dp(12), dp(16))
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        nativeScrollView.addView(nativeListContainer)
+        centerFrame.addView(webView)
+        centerFrame.addView(nativeScrollView)
+        root.addView(centerFrame)
+
+        // --- PROGRESS BAR ---
         progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 1000
             progress = 0
@@ -187,20 +212,15 @@ class MainActivity : AppCompatActivity() {
         }
         root.addView(progressBar)
 
-        // --- NATIVE ANDROID BOTTOM PLAY BAR ---
+        // --- NATIVE BOTTOM NOW PLAYING BAR ---
         val playerCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#202020"))
             setPadding(dp(12), dp(8), dp(12), dp(10))
         }
 
-        val trackInfoLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, 0, 0, dp(6))
-        }
-
         trackTitleView = TextView(this).apply {
-            text = "Tap any song to start playing"
+            text = "Loading Spotify Desktop Backend..."
             setTextColor(Color.WHITE)
             textSize = 15f
             setTypeface(null, Typeface.BOLD)
@@ -209,16 +229,16 @@ class MainActivity : AppCompatActivity() {
         }
 
         trackArtistView = TextView(this).apply {
-            text = "If silent, tap 'Connect Audio' at the top"
+            text = "Tap 'Login / Web' if you need to sign in first"
             setTextColor(Color.parseColor("#B3B3B3"))
             textSize = 13f
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
+            setPadding(0, 0, 0, dp(6))
         }
 
-        trackInfoLayout.addView(trackTitleView)
-        trackInfoLayout.addView(trackArtistView)
-        playerCard.addView(trackInfoLayout)
+        playerCard.addView(trackTitleView)
+        playerCard.addView(trackArtistView)
 
         val controlsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -253,6 +273,11 @@ class MainActivity : AppCompatActivity() {
         root.addView(playerCard)
 
         return root
+    }
+
+    private fun setRawWebViewVisible(visible: Boolean) {
+        showingRawWebView = visible
+        nativeScrollView.visibility = if (visible) View.GONE else View.VISIBLE
     }
 
     private fun createTabButton(label: String, onClick: () -> Unit): Button {
@@ -315,29 +340,18 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun switchMobileMode(mode: String) {
+    private fun requestBackendList(mode: String) {
         webView.evaluateJavascript(
-            """
-            (function() {
-                document.body.setAttribute('data-mobile-view', '$mode');
-            })();
-            """.trimIndent(),
+            "if (window.__spExtractList) window.__spExtractList('$mode');",
             null
         )
     }
 
     private fun activateWebPlayerDevice() {
-        Toast.makeText(this, "Activating local web player audio...", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Connecting to local web player audio...", Toast.LENGTH_SHORT).show()
         webView.evaluateJavascript(
             """
             (function() {
-                // Resume any suspended Web Audio contexts
-                if (window.__spAudioContexts) {
-                    window.__spAudioContexts.forEach(function(ctx) {
-                        try { ctx.resume(); } catch(e) {}
-                    });
-                }
-                // Click the Connect Device button to reveal 'This web browser' and select it
                 var connectBtn = document.querySelector('[data-testid="control-button-npv"], [aria-label*="Connect to a device"], button[aria-label*="device"]');
                 if (connectBtn) connectBtn.click();
                 setTimeout(function() {
@@ -358,7 +372,7 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    @SuppressLint("SetJavaScriptEnabled")
+    @SuppressLint("SetJavaScriptEnabled", "RequiresFeature")
     private fun configureWebView() {
         val settings = webView.settings
         settings.apply {
@@ -367,15 +381,11 @@ class MainActivity : AppCompatActivity() {
             databaseEnabled = true
             mediaPlaybackRequiresUserGesture = false
             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-
-            // Spoof Windows Desktop Chrome
             userAgentString = desktopUserAgent
-
-            // Keep 1:1 mobile readability while spoofing desktop screen dimensions in JS
-            useWideViewPort = false
-            loadWithOverviewMode = false
-            setSupportZoom(false)
-            builtInZoomControls = false
+            useWideViewPort = true
+            loadWithOverviewMode = true
+            setSupportZoom(true)
+            builtInZoomControls = true
             displayZoomControls = false
             cacheMode = WebSettings.LOAD_DEFAULT
         }
@@ -386,6 +396,15 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.addJavascriptInterface(SpotifyBridge(), "AndroidBridge")
+
+        // Use DocumentStartJavaScript so desktop properties exist BEFORE Spotify's bundle runs
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            WebViewCompat.addDocumentStartJavaScript(
+                webView,
+                SAFE_DOCUMENT_START_SPOOF_JS,
+                setOf("*")
+            )
+        }
 
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(
@@ -399,17 +418,10 @@ class MainActivity : AppCompatActivity() {
                 return false
             }
 
-            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
-                super.onPageStarted(view, url, favicon)
-                // Inject desktop environment spoof BEFORE Spotify's scripts check navigator.userAgentData
-                view?.evaluateJavascript(DESKTOP_ENVIRONMENT_SPOOF_JS, null)
-            }
-
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 CookieManager.getInstance().flush()
-                view?.evaluateJavascript(DESKTOP_ENVIRONMENT_SPOOF_JS, null)
-                view?.evaluateJavascript(MOBILE_UI_TRANSFORM_JS, null)
+                view?.evaluateJavascript(BRIDGE_EXTRACTOR_JS, null)
             }
         }
 
@@ -439,6 +451,93 @@ class MainActivity : AppCompatActivity() {
                 playPauseBtn.text = if (isPlaying) "Pause" else "Play"
                 progressBar.progress = progressPermille.coerceIn(0, 1000)
             }
+        }
+
+        @JavascriptInterface
+        fun onItemsExtracted(mode: String, jsonArrayStr: String) {
+            runOnUiThread {
+                renderNativeMobileList(mode, jsonArrayStr)
+            }
+        }
+    }
+
+    private fun renderNativeMobileList(mode: String, jsonArrayStr: String) {
+        nativeListContainer.removeAllViews()
+        val arr = try {
+            JSONArray(jsonArrayStr)
+        } catch (_: Exception) {
+            JSONArray()
+        }
+
+        val header = TextView(this).apply {
+            text = if (mode == "playlists") "Your Playlists & Library (${arr.length()})" else "Songs & Results (${arr.length()})"
+            setTextColor(Color.parseColor("#1DB954"))
+            textSize = 18f
+            setTypeface(null, Typeface.BOLD)
+            setPadding(dp(4), dp(6), dp(4), dp(12))
+        }
+        nativeListContainer.addView(header)
+
+        if (arr.length() == 0) {
+            val emptyView = TextView(this).apply {
+                text = "Loading items from Spotify Desktop backend...
+
+If you haven't signed in yet, tap 'Login / Web' at the top right, log in to your Spotify account, then tap 'Playlists' or 'Songs' again."
+                setTextColor(Color.parseColor("#CCCCCC"))
+                textSize = 15f
+                setPadding(dp(8), dp(16), dp(8), dp(16))
+            }
+            nativeListContainer.addView(emptyView)
+            return
+        }
+
+        for (i in 0 until arr.length()) {
+            val obj = arr.optJSONObject(i) ?: continue
+            val itemTitle = obj.optString("title", "Untitled")
+            val itemSubtitle = obj.optString("subtitle", "")
+            val domIndex = obj.optInt("index", i)
+
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(Color.parseColor("#1E1E1E"))
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    setMargins(0, 0, 0, dp(8))
+                }
+                setOnClickListener {
+                    if (mode == "playlists") {
+                        webView.evaluateJavascript("window.__spClickPlaylist($domIndex);", null)
+                        Toast.makeText(this@MainActivity, "Opening $itemTitle...", Toast.LENGTH_SHORT).show()
+                    } else {
+                        webView.evaluateJavascript("window.__spClickTrack($domIndex);", null)
+                        Toast.makeText(this@MainActivity, "Playing $itemTitle", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+
+            val titleTv = TextView(this).apply {
+                text = itemTitle
+                setTextColor(Color.WHITE)
+                textSize = 16f
+                setTypeface(null, Typeface.BOLD)
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+            }
+
+            val subTv = TextView(this).apply {
+                text = if (itemSubtitle.isNotBlank()) itemSubtitle else if (mode == "playlists") "Tap to open playlist" else "Tap to play song"
+                setTextColor(Color.parseColor("#AAAAAA"))
+                textSize = 13f
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+            }
+
+            card.addView(titleTv)
+            card.addView(subTv)
+            nativeListContainer.addView(card)
         }
     }
 
@@ -475,31 +574,21 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         /**
-         * Spoofs Windows Desktop properties so Spotify's Web Playback SDK & Widevine EME
-         * treat the Android WebView as a real desktop Chrome browser.
+         * Safe desktop property spoofing on Screen.prototype & Navigator.prototype
+         * so V8 never throws Illegal invocation on window.screen.orientation.
          */
-        private val DESKTOP_ENVIRONMENT_SPOOF_JS = """
+        private val SAFE_DOCUMENT_START_SPOOF_JS = """
             (function() {
-                if (window.__spDesktopSpoofed) return;
-                window.__spDesktopSpoofed = true;
-
-                // Track all created AudioContexts so we can resume them anytime
-                window.__spAudioContexts = [];
-                var OrigAudioContext = window.AudioContext || window.webkitAudioContext;
-                if (OrigAudioContext) {
-                    var PatchedAudioContext = function() {
-                        var ctx = new OrigAudioContext();
-                        window.__spAudioContexts.push(ctx);
-                        return ctx;
-                    };
-                    PatchedAudioContext.prototype = OrigAudioContext.prototype;
-                    window.AudioContext = PatchedAudioContext;
-                }
-
                 try {
-                    Object.defineProperty(navigator, 'platform', { get: function() { return 'Win32'; } });
-                    Object.defineProperty(navigator, 'maxTouchPoints', { get: function() { return 0; } });
-                    Object.defineProperty(navigator, 'userAgentData', {
+                    Object.defineProperty(Navigator.prototype, 'platform', {
+                        get: function() { return 'Win32'; },
+                        configurable: true
+                    });
+                    Object.defineProperty(Navigator.prototype, 'maxTouchPoints', {
+                        get: function() { return 0; },
+                        configurable: true
+                    });
+                    Object.defineProperty(Navigator.prototype, 'userAgentData', {
                         get: function() {
                             return {
                                 brands: [
@@ -521,115 +610,85 @@ class MainActivity : AppCompatActivity() {
                                     });
                                 }
                             };
-                        }
+                        },
+                        configurable: true
                     });
-                } catch(e) {}
-
-                try {
-                    var fakeScreen = Object.create(window.screen);
-                    Object.defineProperty(fakeScreen, 'width', { get: function() { return 1920; } });
-                    Object.defineProperty(fakeScreen, 'height', { get: function() { return 1080; } });
-                    Object.defineProperty(fakeScreen, 'availWidth', { get: function() { return 1920; } });
-                    Object.defineProperty(fakeScreen, 'availHeight', { get: function() { return 1040; } });
-                    Object.defineProperty(window, 'screen', { get: function() { return fakeScreen; } });
-                } catch(e) {}
+                    Object.defineProperty(Screen.prototype, 'width', { get: function() { return 1920; }, configurable: true });
+                    Object.defineProperty(Screen.prototype, 'height', { get: function() { return 1080; }, configurable: true });
+                    Object.defineProperty(Screen.prototype, 'availWidth', { get: function() { return 1920; }, configurable: true });
+                    Object.defineProperty(Screen.prototype, 'availHeight', { get: function() { return 1040; }, configurable: true });
+                } catch (e) {}
             })();
         """.trimIndent()
 
         /**
-         * Injects mobile-responsive CSS that hides the tiny desktop multi-column chrome,
-         * scales the active view (Main content OR Library Playlists) to 100% mobile screen width
-         * at readable 1.0x mobile font size, and syncs track info to the native Android bottom bar.
+         * Extracts Playlists and Songs from the hidden desktop DOM and renders them
+         * inside the Native Android Mobile UI list, plus syncs Now Playing bar.
          */
-        private val MOBILE_UI_TRANSFORM_JS = """
+        private val BRIDGE_EXTRACTOR_JS = """
             (function() {
-                if (window.__spMobileUiInjected) return;
-                window.__spMobileUiInjected = true;
+                if (window.__spBridgeInitialized) return;
+                window.__spBridgeInitialized = true;
 
-                var meta = document.querySelector('meta[name="viewport"]');
-                if (!meta) {
-                    meta = document.createElement('meta');
-                    meta.name = 'viewport';
-                    document.head.appendChild(meta);
-                }
-                meta.content = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
+                window.__spCurrentMode = 'tracks';
 
-                var style = document.createElement('style');
-                style.id = 'sp-mobile-bridge-css';
-                style.innerHTML = `
-                    /* Hide desktop clutter, upgrade banners, right buddy-feed, and tiny bottom bar */
-                    aside[aria-label*="Now Playing"],
-                    div[data-testid="now-playing-bar"],
-                    footer,
-                    a[href*="/download"],
-                    button[aria-label*="Upgrade"],
-                    div[aria-label*="Upgrade"] {
-                        display: none !important;
-                    }
-
-                    /* Force main layout container to single mobile column */
-                    body, #main, .Root__top-container {
-                        width: 100vw !important;
-                        max-width: 100vw !important;
-                        overflow-x: hidden !important;
-                        display: block !important;
-                        padding: 0 !important;
-                        margin: 0 !important;
-                    }
-
-                    /* Default Mode: Show Main Content (Home / Search / Playlist Tracks) full width */
-                    body:not([data-mobile-view="library"]) #Desktop_LeftSidebar_Id,
-                    body:not([data-mobile-view="library"]) nav[aria-label="Main"] {
-                        display: none !important;
-                    }
-                    body:not([data-mobile-view="library"]) .Root__main-view,
-                    body:not([data-mobile-view="library"]) main {
-                        width: 100vw !important;
-                        max-width: 100vw !important;
-                        height: 100vh !important;
-                        margin: 0 !important;
-                        border-radius: 0 !important;
-                    }
-
-                    /* Library Mode: Show Your Library / Playlists full width when 'My Playlists' tab is tapped */
-                    body[data-mobile-view="library"] .Root__main-view {
-                        display: none !important;
-                    }
-                    body[data-mobile-view="library"] #Desktop_LeftSidebar_Id,
-                    body[data-mobile-view="library"] nav[aria-label="Main"] {
-                        display: block !important;
-                        width: 100vw !important;
-                        max-width: 100vw !important;
-                        height: 100vh !important;
-                    }
-
-                    /* Make track rows touch-friendly on mobile screens */
-                    div[data-testid="tracklist-row"] {
-                        min-height: 58px !important;
-                        padding: 6px 8px !important;
-                    }
-                `;
-                document.head.appendChild(style);
-
-                // When user clicks a playlist inside Library view, automatically switch to Main view to show its songs
-                document.addEventListener('click', function(e) {
-                    if (document.body.getAttribute('data-mobile-view') === 'library') {
-                        var row = e.target.closest('li, [role="listitem"], a[href*="/playlist/"], a[href*="/album/"], a[href*="/collection/"]');
-                        if (row) {
-                            setTimeout(function() {
-                                document.body.setAttribute('data-mobile-view', 'main');
-                            }, 250);
+                window.__spExtractList = function(mode) {
+                    window.__spCurrentMode = mode;
+                    var results = [];
+                    if (mode === 'playlists') {
+                        var items = document.querySelectorAll('#Desktop_LeftSidebar_Id li, nav[aria-label="Main"] li, [data-testid="rootlist-item"]');
+                        for (var i = 0; i < items.length; i++) {
+                            var text = (items[i].innerText || '').trim().split('\n');
+                            var title = (text[0] || '').trim();
+                            var sub = text.slice(1).join(' • ').trim();
+                            if (title) {
+                                results.push({ index: i, title: title, subtitle: sub });
+                            }
+                        }
+                    } else {
+                        var rows = document.querySelectorAll('[data-testid="tracklist-row"], [data-testid="herocard-click-handler"], [data-testid="card-click-handler"]');
+                        for (var j = 0; j < rows.length; j++) {
+                            var lines = (rows[j].innerText || '').trim().split('\n').filter(Boolean);
+                            if (lines.length > 0) {
+                                var tTitle = lines.length > 1 && /^\d+$/.test(lines[0]) ? lines[1] : lines[0];
+                                var tSub = lines.slice(lines.indexOf(tTitle) + 1).join(' • ');
+                                results.push({ index: j, title: tTitle, subtitle: tSub });
+                            }
                         }
                     }
-                }, true);
+                    if (window.AndroidBridge && window.AndroidBridge.onItemsExtracted) {
+                        window.AndroidBridge.onItemsExtracted(mode, JSON.stringify(results));
+                    }
+                };
 
-                // Poll Now Playing state and send to Native Android Bottom Play Bar
+                window.__spClickPlaylist = function(idx) {
+                    var items = document.querySelectorAll('#Desktop_LeftSidebar_Id li, nav[aria-label="Main"] li, [data-testid="rootlist-item"]');
+                    if (items[idx]) {
+                        var clickable = items[idx].querySelector('a, div[role="button"], button') || items[idx];
+                        clickable.click();
+                        setTimeout(function() { window.__spExtractList('tracks'); }, 1200);
+                    }
+                };
+
+                window.__spClickTrack = function(idx) {
+                    var rows = document.querySelectorAll('[data-testid="tracklist-row"], [data-testid="herocard-click-handler"], [data-testid="card-click-handler"]');
+                    if (rows[idx]) {
+                        var playBtn = rows[idx].querySelector('button[aria-label*="Play"], [data-testid="play-button"]');
+                        if (playBtn) {
+                            playBtn.click();
+                        } else {
+                            rows[idx].click();
+                            var dblEvt = new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window });
+                            rows[idx].dispatchEvent(dblEvt);
+                        }
+                    }
+                };
+
                 setInterval(function() {
                     try {
                         var titleEl = document.querySelector('[data-testid="context-item-info-title"], [data-testid="now-playing-widget"] a');
                         var artistEl = document.querySelector('[data-testid="context-item-info-subtitles"], [data-testid="context-item-info-artist"]');
                         var playBtn = document.querySelector('[data-testid="control-button-playpause"]');
-                        var progBar = document.querySelector('[data-testid="playback-progressbar"] input[type="range"], [data-testid="playback-position"]');
 
                         var title = titleEl ? (titleEl.innerText || '').trim() : '';
                         var artist = artistEl ? (artistEl.innerText || '').trim() : '';
@@ -652,8 +711,9 @@ class MainActivity : AppCompatActivity() {
                         if (window.AndroidBridge && window.AndroidBridge.onTrackUpdate) {
                             window.AndroidBridge.onTrackUpdate(title, artist, isPlaying, permille);
                         }
+                        window.__spExtractList(window.__spCurrentMode || 'tracks');
                     } catch(err) {}
-                }, 800);
+                }, 1500);
             })();
         """.trimIndent()
     }
